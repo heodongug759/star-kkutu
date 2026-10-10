@@ -2,18 +2,88 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const path = require('path');
+const session = require('express-session');
+const passport = require('passport');
+const GitHubStrategy = require('passport-github2').Strategy;
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// ==========================================
+// [설정] GitHub OAuth 키 & GM 깃허브 아이디 목록
+// ==========================================
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || '발급받은_GITHUB_CLIENT_ID';
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '발급받은_GITHUB_CLIENT_SECRET';
+
+// GM 권한을 줄 깃허브 닉네임(Username) 목록
+const GM_USERNAMES = ['본인_깃허브_아이디', 'admin'];
+
+// 세션 설정
+const sessionMiddleware = session({
+  secret: 'star-kkutu-github-secret-key',
+  resave: false,
+  saveUninitialized: false
+});
+
+app.use(sessionMiddleware);
+app.use(passport.initialize());
+app.use(passport.session());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// GM 목록 (닉네임 기준)
-const GM_LIST = ['star', 'GM', 'admin', "hello"];
+// Passport 깃허브 전략 설정
+passport.use(new GitHubStrategy({
+    clientID: GITHUB_CLIENT_ID,
+    clientSecret: GITHUB_CLIENT_SECRET,
+    callbackURL: process.env.CALLBACK_URL || "http://localhost:3000/auth/github/callback"
+  },
+  (accessToken, refreshToken, profile, done) => {
+    const username = profile.username;
+    const user = {
+      id: profile.id,
+      name: profile.displayName || username,
+      username: username,
+      isGM: GM_USERNAMES.includes(username)
+    };
+    return done(null, user);
+  }
+));
 
+passport.serializeUser((user, done) => done(null, user));
+passport.deserializeUser((obj, done) => done(null, obj));
+
+// Express 세션을 Socket.io와 공유
+io.engine.use(sessionMiddleware);
+
+// ==========================================
+// 깃허브 로그인 인증 라우트
+// ==========================================
+app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
+
+app.get('/auth/github/callback', 
+  passport.authenticate('github', { failureRedirect: '/' }),
+  (req, res) => res.redirect('/')
+);
+
+app.get('/api/user', (req, res) => {
+  if (req.isAuthenticated()) {
+    res.json({ loggedIn: true, user: req.user });
+  } else {
+    res.json({ loggedIn: false });
+  }
+});
+
+app.get('/logout', (req, res) => {
+  req.logout(() => {
+    res.redirect('/');
+  });
+});
+
+// ==========================================
+// 스타 끄투 게임 로직
+// ==========================================
 const gameState = {
-  players: [],        // { id, name, isGM, bg, badge }
+  players: [],
   currentTurn: 0,
   currentWord: '',
   usedWords: new Set(),
@@ -22,7 +92,6 @@ const gameState = {
   isStarted: false
 };
 
-// 두음법칙 변환
 function getValidNextChars(char) {
   const chars = [char];
   const code = char.charCodeAt(0) - 0xac00;
@@ -78,42 +147,50 @@ function nextTurn() {
 }
 
 io.on('connection', (socket) => {
-  socket.on('joinGame', (nickname) => {
-    const cleanName = nickname.trim() || `유저_${socket.id.slice(0, 4)}`;
-    const isGM = GM_LIST.includes(cleanName);
+  const req = socket.request;
+  const sessionUser = req.session?.passport?.user;
 
-    const player = {
-      id: socket.id,
-      name: cleanName,
-      isGM: isGM,
-      badge: isGM ? '👑 [GM]' : '🎮 [PLAYER]',
-      bg: isGM ? 'gm-bg' : 'default-bg' // GM 전용 골드 그라데이션 배경
-    };
+  if (!sessionUser) {
+    socket.emit('systemMessage', '❌ GitHub 로그인이 필요합니다.');
+    return;
+  }
 
+  const player = {
+    id: socket.id,
+    name: sessionUser.name,
+    username: sessionUser.username,
+    isGM: sessionUser.isGM,
+    badge: sessionUser.isGM ? '👑 [GM]' : '🎮 [PLAYER]',
+    bg: sessionUser.isGM ? 'gm-bg' : 'default-bg'
+  };
+
+  const existingIdx = gameState.players.findIndex(p => p.username === player.username);
+  if (existingIdx !== -1) {
+    gameState.players[existingIdx] = player;
+  } else {
     gameState.players.push(player);
+  }
 
-    io.emit('updatePlayers', gameState.players);
-    socket.emit('initSelf', player);
-    socket.emit('systemMessage', `📢 ${player.name}님 환영합니다! ${isGM ? '(GM 권한이 활성화되었습니다)' : ''}`);
+  io.emit('updatePlayers', gameState.players);
+  socket.emit('initSelf', player);
+  socket.emit('systemMessage', `📢 ${player.name}(@${player.username})님 환영합니다! ${player.isGM ? '(👑 GM 권한이 부여되었습니다)' : ''}`);
 
-    if (gameState.players.length === 1 && !gameState.isStarted) {
-      gameState.isStarted = true;
-      gameState.currentWord = '스타끄투'; // 첫 제시어를 '스타끄투'로 변경
-      gameState.usedWords.add('스타끄투');
-      
-      io.emit('gameStart', {
-        currentWord: gameState.currentWord,
-        currentPlayer: gameState.players[0]
-      });
-      startTimer();
-    } else {
-
-      socket.emit('gameState', {
-        currentWord: gameState.currentWord,
-        currentPlayer: gameState.players[gameState.currentTurn]
-      });
-    }
-  });
+  if (gameState.players.length === 1 && !gameState.isStarted) {
+    gameState.isStarted = true;
+    gameState.currentWord = '스타끄투';
+    gameState.usedWords.add('스타끄투');
+    
+    io.emit('gameStart', {
+      currentWord: gameState.currentWord,
+      currentPlayer: gameState.players[0]
+    });
+    startTimer();
+  } else {
+    socket.emit('gameState', {
+      currentWord: gameState.currentWord,
+      currentPlayer: gameState.players[gameState.currentTurn]
+    });
+  }
 
   socket.on('submitWord', (word) => {
     word = word.trim();
@@ -168,5 +245,5 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = 3000;
-server.listen(PORT, () => console.log(`🚀 끄투 게임 서버 오픈: http://localhost:${PORT}`));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}`));
