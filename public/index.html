@@ -2,12 +2,21 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <title>스타 끄투</title>
+  <title>스타 끄투 (STAR KKUTU)</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; }
     body { background: #1e1e2f; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
     .game-window { width: 800px; background: #2b2b40; border-radius: 16px; border: 3px solid #3f3f5f; padding: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.5); }
     .header { text-align: center; font-size: 28px; font-weight: bold; color: #ffcc00; text-shadow: 0 0 10px rgba(255, 204, 0, 0.5); margin-bottom: 20px; }
+    
+    /* 깃허브 로그인 버튼 스타일 */
+    .github-btn {
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      width: 100%; padding: 14px; background: #24292e; color: #fff; font-weight: bold;
+      border-radius: 8px; text-decoration: none; font-size: 16px; border: 1px solid #444; transition: 0.2s;
+    }
+    .github-btn:hover { background: #333; }
+
     .main-stage { display: grid; grid-template-columns: 2fr 1fr; gap: 15px; }
     .display-box { background: #181824; border-radius: 12px; padding: 30px; text-align: center; position: relative; border: 2px solid #444466; }
     .word-main { font-size: 48px; font-weight: 800; color: #00ffcc; text-shadow: 0 0 15px rgba(0, 255, 204, 0.6); margin: 15px 0; }
@@ -31,19 +40,29 @@
     .log-item { margin-bottom: 4px; color: #aaa; }
     .log-gm { color: #ffd700; font-weight: bold; }
     .log-accepted { color: #00ffcc; }
+    .user-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; background: #181824; padding: 10px 15px; border-radius: 8px; }
   </style>
 </head>
 <body>
 
 <div class="game-window">
-  <div class="header">⭐ STAR KKUTU (스타 끄투)</div>v>
+  <div class="header">⭐ STAR KKUTU (스타 끄투)</div>
 
-  <div id="login-box" class="input-area" style="margin-bottom: 20px;">
-    <input type="text" id="nickname" placeholder="닉네임 입력">
-    <button onclick="join()">게임 입장</button>
+  <!-- 깃허브 로그인 버튼 영역 -->
+  <div id="login-box" style="margin: 30px 0;">
+    <a href="/auth/github" class="github-btn">
+      <svg height="20" width="20" viewBox="0 0 16 16" fill="white"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.28.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+      GitHub 계정으로 로그인하여 시작하기
+    </a>
   </div>
 
+  <!-- 게임 영역 -->
   <div id="game-stage" style="display: none;">
+    <div class="user-info">
+      <span id="my-profile">로그인 정보 확인 중...</span>
+      <a href="/logout" style="color: #ff4757; text-decoration: none; font-size: 13px;">로그아웃</a>
+    </div>
+
     <div class="main-stage">
       <div class="display-box">
         <div id="turn-info" style="color: #aaa;">대기 중...</div>
@@ -64,18 +83,72 @@
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-  const socket = io();
+  let socket = null;
 
-  function join() {
-    const nick = document.getElementById('nickname').value;
-    socket.emit('joinGame', nick);
-    document.getElementById('login-box').style.display = 'none';
-    document.getElementById('game-stage').style.display = 'block';
+  fetch('/api/user')
+    .then(res => res.json())
+    .then(data => {
+      if (data.loggedIn) {
+        document.getElementById('login-box').style.display = 'none';
+        document.getElementById('game-stage').style.display = 'block';
+        
+        const u = data.user;
+        document.getElementById('my-profile').innerHTML = `${u.isGM ? '👑 [GM]' : '🎮'} <strong>${u.name}</strong> (@${u.username})`;
+        
+        initSocket();
+      }
+    });
+
+  function initSocket() {
+    socket = io();
+
+    socket.on('systemMessage', (msg) => log(msg));
+
+    socket.on('updatePlayers', (players) => {
+      const container = document.getElementById('player-list');
+      container.innerHTML = '';
+      players.forEach(p => {
+        const card = document.createElement('div');
+        card.className = `player-card ${p.bg} ${p.isTurn ? 'turn-active' : ''}`;
+        card.id = `player-${p.id}`;
+        
+        const badgeSpan = p.isGM 
+          ? `<span class="gm-badge">GM</span>` 
+          : `<span class="user-badge">USER</span>`;
+
+        card.innerHTML = `${badgeSpan} <strong>${p.name}</strong>`;
+        container.appendChild(card);
+      });
+    });
+
+    socket.on('gameStart', (data) => {
+      document.getElementById('current-word').innerText = data.currentWord;
+      log(`🚀 게임 시작! 제시어: [${data.currentWord}]`);
+    });
+
+    socket.on('turnChange', (data) => {
+      document.getElementById('turn-info').innerText = `${data.currentPlayer.name}님의 턴`;
+      document.getElementById('current-word').innerText = data.currentWord;
+
+      document.querySelectorAll('.player-card').forEach(el => el.classList.remove('turn-active'));
+      const activeCard = document.getElementById(`player-${data.currentPlayer.id}`);
+      if (activeCard) activeCard.classList.add('turn-active');
+    });
+
+    socket.on('timerTick', (t) => {
+      document.getElementById('timer').innerText = t;
+    });
+
+    socket.on('wordAccepted', (data) => {
+      const gmTag = data.player.isGM ? '👑 ' : '';
+      log(`${gmTag}[${data.player.name}] ${data.word}`, data.player.isGM ? 'log-gm' : 'log-accepted');
+      document.getElementById('current-word').innerText = data.word;
+    });
   }
 
   function sendWord() {
     const input = document.getElementById('word-input');
-    if (input.value) {
+    if (input && input.value) {
       socket.emit('submitWord', input.value);
       input.value = '';
     }
@@ -89,49 +162,6 @@
     box.appendChild(div);
     box.scrollTop = box.scrollHeight;
   }
-
-  socket.on('systemMessage', (msg) => log(msg));
-
-  socket.on('updatePlayers', (players) => {
-    const container = document.getElementById('player-list');
-    container.innerHTML = '';
-    players.forEach(p => {
-      const card = document.createElement('div');
-      card.className = `player-card ${p.bg} ${p.isTurn ? 'turn-active' : ''}`;
-      card.id = `player-${p.id}`;
-      
-      const badgeSpan = p.isGM 
-        ? `<span class="gm-badge">GM</span>` 
-        : `<span class="user-badge">USER</span>`;
-
-      card.innerHTML = `${badgeSpan} <strong>${p.name}</strong>`;
-      container.appendChild(card);
-    });
-  });
-
-  socket.on('gameStart', (data) => {
-    document.getElementById('current-word').innerText = data.currentWord;
-    log(`🚀 게임 시작! 제시어: [${data.currentWord}]`);
-  });
-
-  socket.on('turnChange', (data) => {
-    document.getElementById('turn-info').innerText = `${data.currentPlayer.name}님의 턴`;
-    document.getElementById('current-word').innerText = data.currentWord;
-
-    document.querySelectorAll('.player-card').forEach(el => el.classList.remove('turn-active'));
-    const activeCard = document.getElementById(`player-${data.currentPlayer.id}`);
-    if (activeCard) activeCard.classList.add('turn-active');
-  });
-
-  socket.on('timerTick', (t) => {
-    document.getElementById('timer').innerText = t;
-  });
-
-  socket.on('wordAccepted', (data) => {
-    const gmTag = data.player.isGM ? '👑 ' : '';
-    log(`${gmTag}[${data.player.name}] ${data.word}`, data.player.isGM ? 'log-gm' : 'log-accepted');
-    document.getElementById('current-word').innerText = data.word;
-  });
 </script>
 
 </body>
