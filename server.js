@@ -13,7 +13,7 @@ const io = new Server(server);
 // ==========================================
 // [설정] GitHub OAuth 키 & GM 깃허브 아이디 목록
 // ==========================================
-const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23lizVNA79tofTb34u
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23lizVNA79tofTb34u'
 ';
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '641a36180151bd9b665fc8e4bc464be9eacf33bd';
 
