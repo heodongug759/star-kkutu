@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>스타 끄투</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Pretendard', sans-serif; }
+    body { background: #1e1e2f; color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+    .game-window { width: 800px; background: #2b2b40; border-radius: 16px; border: 3px solid #3f3f5f; padding: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.5); }
+    .header { text-align: center; font-size: 28px; font-weight: bold; color: #ffcc00; text-shadow: 0 0 10px rgba(255, 204, 0, 0.5); margin-bottom: 20px; }
+    .main-stage { display: grid; grid-template-columns: 2fr 1fr; gap: 15px; }
+    .display-box { background: #181824; border-radius: 12px; padding: 30px; text-align: center; position: relative; border: 2px solid #444466; }
+    .word-main { font-size: 48px; font-weight: 800; color: #00ffcc; text-shadow: 0 0 15px rgba(0, 255, 204, 0.6); margin: 15px 0; }
+    .timer-bar { font-size: 20px; color: #ff4757; font-weight: bold; }
+    .player-list-container { background: #181824; border-radius: 12px; padding: 12px; max-height: 380px; overflow-y: auto; }
+    .player-card { padding: 10px; margin-bottom: 8px; border-radius: 8px; background: #2b2b40; display: flex; align-items: center; gap: 10px; border: 2px solid transparent; }
+    .player-card.gm-bg { background: linear-gradient(135deg, #4a3b00 0%, #2b2b40 100%); border: 2px solid #ffd700; box-shadow: 0 0 12px rgba(255, 215, 0, 0.4); }
+    .gm-badge { background: #ffd700; color: #000; font-weight: bold; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+    .user-badge { background: #3b82f6; color: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+    .turn-active { border-color: #00ffcc !important; animation: pulse 1.5s infinite; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(0, 255, 204, 0.4); }
+      70% { box-shadow: 0 0 0 10px rgba(0, 255, 204, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(0, 255, 204, 0); }
+    }
+    .input-area { margin-top: 15px; display: flex; gap: 10px; }
+    input[type="text"] { flex: 1; padding: 14px; background: #181824; border: 2px solid #444466; border-radius: 8px; color: #fff; font-size: 16px; }
+    input[type="text"]:focus { outline: none; border-color: #00ffcc; }
+    button { padding: 14px 25px; background: #ffcc00; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; color: #000; }
+    .log-box { margin-top: 15px; height: 120px; background: #181824; border-radius: 8px; padding: 10px; overflow-y: auto; font-size: 13px; }
+    .log-item { margin-bottom: 4px; color: #aaa; }
+    .log-gm { color: #ffd700; font-weight: bold; }
+    .log-accepted { color: #00ffcc; }
+  </style>
+</head>
+<body>
+
+<div class="game-window">
+  <div class="header">⭐ STAR KKUTU (스타 끄투)</div>v>
+
+  <div id="login-box" class="input-area" style="margin-bottom: 20px;">
+    <input type="text" id="nickname" placeholder="닉네임 입력 (GM, 운영자 입력 시 GM 권한 부여)">
+    <button onclick="join()">게임 입장</button>
+  </div>
+
+  <div id="game-stage" style="display: none;">
+    <div class="main-stage">
+      <div class="display-box">
+        <div id="turn-info" style="color: #aaa;">대기 중...</div>
+        <div id="current-word" class="word-main">-</div>
+        <div class="timer-bar">⏱️ <span id="timer">15</span>초</div>
+      </div>
+      <div class="player-list-container" id="player-list"></div>
+    </div>
+
+    <div class="input-area">
+      <input type="text" id="word-input" placeholder="단어를 입력하세요..." onkeypress="if(event.key==='Enter') sendWord()">
+      <button onclick="sendWord()">제출</button>
+    </div>
+
+    <div class="log-box" id="logs"></div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io();
+
+  function join() {
+    const nick = document.getElementById('nickname').value;
+    socket.emit('joinGame', nick);
+    document.getElementById('login-box').style.display = 'none';
+    document.getElementById('game-stage').style.display = 'block';
+  }
+
+  function sendWord() {
+    const input = document.getElementById('word-input');
+    if (input.value) {
+      socket.emit('submitWord', input.value);
+      input.value = '';
+    }
+  }
+
+  function log(msg, type = '') {
+    const box = document.getElementById('logs');
+    const div = document.createElement('div');
+    div.className = `log-item ${type}`;
+    div.innerText = msg;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  socket.on('systemMessage', (msg) => log(msg));
+
+  socket.on('updatePlayers', (players) => {
+    const container = document.getElementById('player-list');
+    container.innerHTML = '';
+    players.forEach(p => {
+      const card = document.createElement('div');
+      card.className = `player-card ${p.bg} ${p.isTurn ? 'turn-active' : ''}`;
+      card.id = `player-${p.id}`;
+      
+      const badgeSpan = p.isGM 
+        ? `<span class="gm-badge">GM</span>` 
+        : `<span class="user-badge">USER</span>`;
+
+      card.innerHTML = `${badgeSpan} <strong>${p.name}</strong>`;
+      container.appendChild(card);
+    });
+  });
+
+  socket.on('gameStart', (data) => {
+    document.getElementById('current-word').innerText = data.currentWord;
+    log(`🚀 게임 시작! 제시어: [${data.currentWord}]`);
+  });
+
+  socket.on('turnChange', (data) => {
+    document.getElementById('turn-info').innerText = `${data.currentPlayer.name}님의 턴`;
+    document.getElementById('current-word').innerText = data.currentWord;
+
+    document.querySelectorAll('.player-card').forEach(el => el.classList.remove('turn-active'));
+    const activeCard = document.getElementById(`player-${data.currentPlayer.id}`);
+    if (activeCard) activeCard.classList.add('turn-active');
+  });
+
+  socket.on('timerTick', (t) => {
+    document.getElementById('timer').innerText = t;
+  });
+
+  socket.on('wordAccepted', (data) => {
+    const gmTag = data.player.isGM ? '👑 ' : '';
+    log(`${gmTag}[${data.player.name}] ${data.word}`, data.player.isGM ? 'log-gm' : 'log-accepted');
+    document.getElementById('current-word').innerText = data.word;
+  });
+</script>
+
+</body>
+</html>
