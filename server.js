@@ -18,7 +18,7 @@ const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23lizVNA79tofTb34u
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '641a36180151bd9b665fc8e4bc464be9eacf33bd';
 
 // GM 권한을 줄 깃허브 닉네임(Username) 목록
-const GM_USERNAMES = ['heodongug759'];
+const GM_USERNAMES = ['heodongug759', 'admin'];
 
 // 세션 설정
 const sessionMiddleware = session({
@@ -36,7 +36,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 passport.use(new GitHubStrategy({
     clientID: GITHUB_CLIENT_ID,
     clientSecret: GITHUB_CLIENT_SECRET,
-    callbackURL: process.env.CALLBACK_URL || "http://localhost:3000/auth/github/callback"
+    // Render 환경에서는 환경변수나 실제 URL을 바라보도록 설정
+    callbackURL: process.env.CALLBACK_URL || "https://star-kkutu.onrender.com/auth/github/callback"
   },
   (accessToken, refreshToken, profile, done) => {
     const username = profile.username;
