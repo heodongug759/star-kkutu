@@ -81,7 +81,7 @@ app.get('/logout', (req, res) => {
 });
 
 // ==========================================
-// 💡 [Linux x86_64 최적화] 네이버 사전 API 단어 검증
+// 💡 [네이버 사전 API] 단어 검증 공통 함수
 // ==========================================
 async function verifyWordWithNaver(word) {
   try {
@@ -94,7 +94,6 @@ async function verifyWordWithNaver(word) {
         r_enc: 'utf-8'
       },
       headers: {
-        // 리눅스 민트 x86_64 환경 표준 크롬 User-Agent 적용
         'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       },
       timeout: 3000
@@ -117,7 +116,6 @@ async function verifyWordWithNaver(word) {
     console.error('네이버 사전 API 통신 예외:', err.message);
   }
 
-  // 네트워크 예외 시 순수 한글 2글자 이상 기본 규칙 적용
   const koreanRegex = /^[가-힣]{2,}$/;
   return koreanRegex.test(word);
 }
@@ -132,7 +130,7 @@ app.get('/api/check', async (req, res) => {
 });
 
 // ==========================================
-// 스타 끄투 게임 로직 (리눅스 서버 및 봇 연동)
+// 스타 끄투 게임 로직 (네이버 API 연동 봇 포함)
 // ==========================================
 const gameState = {
   players: [],
@@ -212,6 +210,7 @@ function nextTurn() {
   }
 }
 
+// 🤖 [핵심] 네이버 사전 API를 실시간 조회해서 올바른 단어를 찾아내는 끄투봇
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
@@ -220,30 +219,51 @@ async function handleBotTurn() {
 
   let chosenWord = '';
 
-  const botDictionary = {
-    '사': ['사과', '사자', '사랑', '사막', '사진', '사람'],
-    '과': ['과학', '과자', '과일', '과정', '과목'],
-    '학': ['학생', '학교', '학원', '학습'],
-    '교': ['교실', '교복', '교과서', '교통'],
-    '나': ['나무', '나비', '나팔', '나라'],
-    '무': ['무궁화', '무지개', '무대'],
-    '구': ['구름', '구두', '구슬'],
-    '바': ['바나나', '바다', '바람', '바위']
-  };
-
   for (const startChar of validFirstChars) {
-    const candidateList = botDictionary[startChar] || [startChar + '나무', startChar + '나라', startChar + '구름'];
-    for (let word of candidateList) {
-      if (!gameState.usedWords.has(word)) {
-        chosenWord = word;
-        break;
+    try {
+      // 네이버 사전 자동완성 API를 쿼리하여 해당 글자로 시작하는 단어들을 실시간 수집
+      const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
+        params: {
+          q: startChar,
+          q_enc: 'utf-8',
+          st: 110,
+          r_format: 'json',
+          r_enc: 'utf-8'
+        },
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        timeout: 3000
+      });
+
+      const items = response.data?.items;
+      if (items && Array.isArray(items)) {
+        for (let group of items) {
+          if (Array.isArray(group)) {
+            for (let item of group) {
+              const cleanWord = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
+              if (
+                cleanWord.length >= 2 &&
+                cleanWord.startsWith(startChar) &&
+                !gameState.usedWords.has(cleanWord)
+              ) {
+                chosenWord = cleanWord;
+                break;
+              }
+            }
+          }
+          if (chosenWord) break;
+        }
       }
+    } catch (err) {
+      console.error('봇 네이버 사전 조회 중 예외:', err.message);
     }
     if (chosenWord) break;
   }
 
+  // API에서 못 찾았을 경우 대비한 안전장치
   if (!chosenWord) {
-    chosenWord = lastChar + '가방';
+    chosenWord = lastChar + '나무';
   }
 
   gameState.usedWords.add(chosenWord);
@@ -254,7 +274,7 @@ async function handleBotTurn() {
     word: chosenWord
   });
 
-  io.emit('systemMessage', `🤖 끄투봇이 "${chosenWord}"(을)를 입력했습니다!`);
+  io.emit('systemMessage', `🤖 끄투봇이 네이버 사전 검색을 통해 "${chosenWord}"(을)를 입력했습니다!`);
   nextTurn();
 }
 
@@ -332,7 +352,7 @@ io.on('connection', (socket) => {
       return socket.emit('systemMessage', `❌ '${lastChar}'(으)로 시작해 주세요.`);
     }
 
-    socket.emit('systemMessage', `🔍 "${word}" 단어 확인 중...`);
+    socket.emit('systemMessage', `🔍 "${word}" 네이버 사전 검증 중...`);
     const isValid = await verifyWordWithNaver(word);
 
     if (!isValid) {
