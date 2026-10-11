@@ -263,24 +263,65 @@ io.on('connection', (socket) => {
     nextTurn();
   });
 
-  socket.on('disconnect', () => {
-    const index = gameState.players.findIndex(p => p.id === socket.id);
-    if (index !== -1) {
-      const p = gameState.players.splice(index, 1)[0];
-      io.emit('systemMessage', `👋 ${p.name}님이 퇴장했습니다.`);
-      io.emit('updatePlayers', gameState.players);
+  // 기존 socket.on('submitWord', ...) 부분을 아래 코드로 교체하세요!
+  socket.on('submitWord', async (word) => {
+    word = word.trim();
+    const currentPlayer = gameState.players[gameState.currentTurn];
 
-      if (gameState.players.length === 0) {
-        clearInterval(gameState.timer);
-        gameState.isStarted = false;
-        gameState.usedWords.clear();
-      } else if (gameState.currentTurn >= gameState.players.length) {
-        gameState.currentTurn = 0;
-        nextTurn();
-      }
+    if (!currentPlayer || socket.id !== currentPlayer.id) {
+      return socket.emit('systemMessage', '❌ 본인 턴에만 입력 가능합니다.');
     }
-  });
-});
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}`));
+    if (word.length < 2) {
+      return socket.emit('systemMessage', '❌ 2글자 이상 입력하세요.');
+    }
+
+    if (gameState.usedWords.has(word)) {
+      return socket.emit('systemMessage', '❌ 이미 사용한 단어입니다.');
+    }
+
+    const lastChar = gameState.currentWord.slice(-1);
+    const validFirstChars = getValidNextChars(lastChar);
+
+    if (!validFirstChars.includes(word[0])) {
+      return socket.emit('systemMessage', `❌ '${lastChar}'(으)로 시작해 주세요.`);
+    }
+
+    // ==========================================
+    // 💡 [추가된 부분] 우리말샘 API로 실제 등재 여부 확인
+    // ==========================================
+    socket.emit('systemMessage', `🔍 "${word}" 단어 확인 중...`);
+    
+    try {
+        const response = await axios.get(URIMALSEM_URL, {
+            params: {
+                key: URIMALSEM_API_KEY,
+                q: word,
+                req_type: "json",
+                part: "word",
+                num: 1
+            }
+        });
+
+        const total = parseInt(response.data.channel?.total || 0);
+        
+        if (total === 0) {
+            return socket.emit('systemMessage', `❌ "${word}"은(는) 우리말샘에 등재되지 않은 단어입니다.`);
+        }
+    } catch (error) {
+        console.error(error);
+        return socket.emit('systemMessage', '❌ 단어 검증 중 서버 오류가 발생했습니다.');
+    }
+    // ==========================================
+
+    // 통과된 경우 단어 등록 및 턴 넘기기
+    gameState.usedWords.add(word);
+    gameState.currentWord = word;
+
+    io.emit('wordAccepted', {
+      player: currentPlayer,
+      word: word
+    });
+
+    nextTurn();
+  });
