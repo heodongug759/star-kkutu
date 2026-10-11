@@ -276,8 +276,12 @@ io.on('connection', (socket) => {
         let isValidWord = false;
 
         for (let item of itemList) {
-            const targetWord = item.word ? item.word.replace(/[^가-힣]/g, '') : '';
-            if (targetWord === word) {
+            let rawWord = item.word || '';
+            rawWord = rawWord.replace(/<[^>]*>?/gm, ''); // HTML 태그 제거
+            rawWord = rawWord.replace(/\([^)]*\)/g, ''); // 괄호 및 안 내용 제거
+            const targetWord = rawWord.replace(/[^가-힣]/g, ''); // 한글만 추출
+
+            if (targetWord === word || targetWord.includes(word)) {
                 isValidWord = true;
                 break;
             }
