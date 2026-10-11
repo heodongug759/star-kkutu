@@ -117,7 +117,7 @@ app.get('/api/check', async (req, res) => {
 });
 
 // ==========================================
-// 스타 끄투 게임 로직 (끄투봇 포함)
+// 스타 끄투 게임 로직 (완전 API 연동 끄투봇 포함)
 // ==========================================
 const gameState = {
   players: [],
@@ -194,57 +194,57 @@ function nextTurn() {
 
   // 만약 다음 차례가 봇이라면 자동으로 단어 제출 실행
   if (nextPlayer && nextPlayer.isBot) {
-    setTimeout(handleBotTurn, 2000); // 2초 후 봇이 단어 입력
+    setTimeout(handleBotTurn, 2000); // 2초 후 봇이 단어 검색 및 입력
   }
 }
 
-// 끄투봇이 자동으로 단어를 찾아서 제출하는 로직
+// 🤖 [완전 API 기반] 끄투봇이 우리말샘 API를 조회해서 알맞은 단어를 찾는 로직
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
   const lastChar = gameState.currentWord.slice(-1);
   const validFirstChars = getValidNextChars(lastChar);
-  
-  // 간단한 봇 단어 후보군 (실제 운영 시 API를 통해 검색하거나 기본 단어 활용 가능)
-  const botCandidates = {
-    '사': ['사과', '사자', '사랑', '사막'],
-    '과': ['과학', '과자', '과일', '과부'],
-    '나': ['나무', '나비', '나팔', '나방'],
-    '누': ['누룽지', '누명', '누비'],
-    '구': ['구름', '구두', '구슬', '구멍'],
-    '바': ['바나나', '바다', '바람', '바위'],
-    '나': ['나무', '나비'],
-    '컴': ['컴퓨터'],
-    '터': ['터널', '터치', '터키']
-  };
 
   let chosenWord = '';
-  // 마지막 글자로 시작하는 단어 중 안 쓴 것 찾기
-  for (const char of validFirstChars) {
+
+  // 허용되는 시작 글자들 중 API로 실제 단어 검색
+  for (const startChar of validFirstChars) {
     try {
       const response = await axios.get(URIMALSEM_URL, {
-        params: { key: URIMALSEM_API_KEY, q: char, req_type: 'json', part: 'word', num: 5 }
+        params: {
+          key: URIMALSEM_API_KEY,
+          q: startChar,
+          req_type: 'json',
+          part: 'word',
+          num: 30 // 넉넉하게 가져와서 조건에 맞는 것 탐색
+        }
       });
+
       const items = response.data.channel?.item;
       if (items) {
-        const list = Array.isArray(items) ? items : [items];
-        for (let item of list) {
-          let cleanWord = (item.word || '').replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
-          if (cleanWord.length >= 2 && cleanWord.startsWith(char) && !gameState.usedWords.has(cleanWord)) {
+        const itemList = Array.isArray(items) ? items : [items];
+        for (let item of itemList) {
+          let rawWord = item.word || '';
+          // HTML 태그, 괄호 등 제거하고 순수 한글만 추출
+          let cleanWord = rawWord.replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
+
+          // 2글자 이상이고, 봇이 시작해야 하는 글자로 시작하며, 아직 안 쓴 단어인 경우 선택
+          if (cleanWord.length >= 2 && cleanWord.startsWith(startChar) && !gameState.usedWords.has(cleanWord)) {
             chosenWord = cleanWord;
             break;
           }
         }
       }
-    } catch (e) {
-      // API 실패 시 기본 단어 대체
+    } catch (error) {
+      console.error('봇 API 검색 오류:', error);
     }
+
     if (chosenWord) break;
   }
 
-  // 만약 API로 못 찾았을 경우 대체 단어
+  // 만약 API 검색 결과가 마땅치 않을 경우를 대비한 최소한의 안전장치
   if (!chosenWord) {
-    chosenWord = lastChar + '가을'; 
+    chosenWord = lastChar + '나무'; 
   }
 
   // 봇 단어 등록 및 진행
@@ -256,7 +256,7 @@ async function handleBotTurn() {
     word: chosenWord
   });
 
-  io.emit('systemMessage', `🤖 끄투봇이 "${chosenWord}"(을)를 입력했습니다!`);
+  io.emit('systemMessage', `🤖 끄투봇이 API 검색을 통해 "${chosenWord}"(을)를 입력했습니다!`);
   nextTurn();
 }
 
@@ -286,7 +286,7 @@ io.on('connection', (socket) => {
     gameState.players.push(player);
   }
 
-  // 사람이 1명 뿐이라면 끄투봇 자동 참여
+  // 사람이 접속했을 때 봇이 아직 없으면 봇 추가
   if (!gameState.players.some(p => p.isBot)) {
     gameState.players.push(BOT_PLAYER);
   }
@@ -374,7 +374,6 @@ io.on('connection', (socket) => {
     if (index !== -1) {
       gameState.players.splice(index, 1);
       
-      // 유저가 다 나가고 봇만 남았거나 사람이 없을 때 정리
       const humanPlayers = gameState.players.filter(p => !p.isBot);
       if (humanPlayers.length === 0) {
         clearInterval(gameState.timer);
@@ -382,7 +381,6 @@ io.on('connection', (socket) => {
         gameState.usedWords.clear();
         gameState.players = [];
       } else {
-        // 남은 사람이 혼자면 다시 봇 추가
         if (!gameState.players.some(p => p.isBot)) {
           gameState.players.push(BOT_PLAYER);
         }
