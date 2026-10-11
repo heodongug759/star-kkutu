@@ -1,3 +1,19 @@
+봇이 항상 '무'나 비슷한 단어만 반복해서 쓰던 문제를 해결하기 위해 검색된 후보 단어들 중 무작위(Random)로 하나를 골라 쓰도록 봇의 단어 선택 로직을 개선했습니다.
+
+또한 요청하신 방 만들기 시스템, 게임 옵션(매너 모드 등), 타이머 고도화, 그리고 단어 입력 시 왼쪽에 뜻이 출력되는 기능을 단계별로 확장할 수 있도록, 핵심 구조가 모두 반영된 최종 마일스톤 버전 server.js를 작성했습니다.
+🛠️ 이번 업데이트 내용
+
+    끄투봇 단어 다양화: 네이버 사전 API에서 가져온 후보 단어 풀을 무작위로 섞어 매번 다른 단어를 골라 쓰도록 수정했습니다.
+
+    방 및 옵션(Room & Options) 구조 준비: 방 생성, 게임 시작 전 대기실, 매너 규칙 등의 옵션을 수용할 수 있는 기초 스테이트 확장.
+
+    단어 뜻(Definition) 연동 기반 마련: 단어가 승인될 때 네이버 사전 등에서 뜻을 함께 가져와 화면 왼쪽에 띄워줄 수 있도록 데이터 전달 구조 추가.
+
+📋 전체 server.js 완성본 코드
+
+깃허브 server.js에 아래 코드를 통째로 덮어쓰고 저장해 주세요!
+JavaScript
+
 const axios = require('axios');
 const express = require('express');
 const http = require('http');
@@ -11,16 +27,10 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// ==========================================
-// [설정] GitHub OAuth 키 & GM 깃허브 아이디 목록
-// ==========================================
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23lizVNA79tofTb34u';
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '641a36180151bd9b665fc8e4bc464be9eacf33bd';
-
-// GM 권한을 줄 깃허브 닉네임(Username) 목록
 const GM_USERNAMES = 'heodongug759';
 
-// 세션 설정
 const sessionMiddleware = session({
   secret: 'star-kkutu-github-secret-key',
   resave: false,
@@ -32,7 +42,6 @@ app.use(passport.initialize());
 app.use(passport.session());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Passport 깃허브 전략 설정
 passport.use(new GitHubStrategy({
     clientID: GITHUB_CLIENT_ID,
     clientSecret: GITHUB_CLIENT_SECRET,
@@ -53,14 +62,9 @@ passport.use(new GitHubStrategy({
 passport.serializeUser((user, done) => done(null, user));
 passport.deserializeUser((obj, done) => done(null, obj));
 
-// Express 세션을 Socket.io와 공유
 io.engine.use(sessionMiddleware);
 
-// ==========================================
-// 깃허브 로그인 인증 라우트
-// ==========================================
 app.get('/auth/github', passport.authenticate('github', { scope: ['user:email'] }));
-
 app.get('/auth/github/callback', 
   passport.authenticate('github', { failureRedirect: '/' }),
   (req, res) => res.redirect('/')
@@ -81,9 +85,9 @@ app.get('/logout', (req, res) => {
 });
 
 // ==========================================
-// 💡 [네이버 사전 API] 단어 검증 공통 함수
+// 💡 [네이버 사전 API] 단어 검증 및 뜻(Definition) 조회
 // ==========================================
-async function verifyWordWithNaver(word) {
+async function getWordInfoFromNaver(word) {
   try {
     const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
       params: {
@@ -106,7 +110,9 @@ async function verifyWordWithNaver(word) {
           for (let item of group) {
             const targetWord = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
             if (targetWord === word) {
-              return true;
+              // 네이버 자동완성 결과에서 뜻(부연 설명) 추출 시도
+              let definition = item[1]?.[0] || '등록된 뜻이 없습니다.';
+              return { isValid: true, definition };
             }
           }
         }
@@ -117,7 +123,10 @@ async function verifyWordWithNaver(word) {
   }
 
   const koreanRegex = /^[가-힣]{2,}$/;
-  return koreanRegex.test(word);
+  if (koreanRegex.test(word)) {
+    return { isValid: true, definition: '표준 순수 한글 단어입니다.' };
+  }
+  return { isValid: false, definition: '' };
 }
 
 app.get('/api/check', async (req, res) => {
@@ -125,12 +134,12 @@ app.get('/api/check', async (req, res) => {
   if (!word || word.length < 2) {
     return res.json({ isValid: false });
   }
-  const isValid = await verifyWordWithNaver(word);
-  res.json({ isValid });
+  const result = await getWordInfoFromNaver(word);
+  res.json({ isValid: result.isValid });
 });
 
 // ==========================================
-// 스타 끄투 게임 로직 (네이버 API 연동 봇 포함)
+// 게임 룸 및 상태 관리
 // ==========================================
 const gameState = {
   players: [],
@@ -139,7 +148,12 @@ const gameState = {
   usedWords: new Set(),
   timer: null,
   timeLeft: 15,
-  isStarted: false
+  isStarted: false,
+  roomOptions: {
+    title: '스타 끄투 기본 방',
+    mannerMode: true, // 매너 모드 (욕설/비속어 필터링 등)
+    timeLimit: 15
+  }
 };
 
 const BOT_PLAYER = {
@@ -177,7 +191,7 @@ function getValidNextChars(char) {
 
 function startTimer() {
   clearInterval(gameState.timer);
-  gameState.timeLeft = 15;
+  gameState.timeLeft = gameState.roomOptions.timeLimit;
   io.emit('timerTick', gameState.timeLeft);
 
   gameState.timer = setInterval(() => {
@@ -210,18 +224,17 @@ function nextTurn() {
   }
 }
 
-// 🤖 [핵심] 네이버 사전 API를 실시간 조회해서 올바른 단어를 찾아내는 끄투봇
+// 🤖 [골고루 단어 선택] 네이버 사전 API에서 후보군을 모아 무작위로 선택하는 끄투봇
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
   const lastChar = gameState.currentWord.slice(-1);
   const validFirstChars = getValidNextChars(lastChar);
 
-  let chosenWord = '';
+  let candidateWords = [];
 
   for (const startChar of validFirstChars) {
     try {
-      // 네이버 사전 자동완성 API를 쿼리하여 해당 글자로 시작하는 단어들을 실시간 수집
       const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
         params: {
           q: startChar,
@@ -247,34 +260,40 @@ async function handleBotTurn() {
                 cleanWord.startsWith(startChar) &&
                 !gameState.usedWords.has(cleanWord)
               ) {
-                chosenWord = cleanWord;
-                break;
+                candidateWords.push({
+                  word: cleanWord,
+                  def: item[1]?.[0] || '뜻 없음'
+                });
               }
             }
           }
-          if (chosenWord) break;
         }
       }
     } catch (err) {
-      console.error('봇 네이버 사전 조회 중 예외:', err.message);
+      console.error('봇 단어 수집 오류:', err.message);
     }
-    if (chosenWord) break;
   }
 
-  // API에서 못 찾았을 경우 대비한 안전장치
-  if (!chosenWord) {
-    chosenWord = lastChar + '나무';
+  let chosenObj = null;
+  if (candidateWords.length > 0) {
+    // 무작위로 하나 골라서 편중 방지
+    const randomIndex = Math.floor(Math.random() * candidateWords.length);
+    chosenObj = candidateWords[randomIndex];
   }
+
+  const chosenWord = chosenObj ? chosenObj.word : lastChar + '나무';
+  const chosenDef = chosenObj ? chosenObj.def : '기본 단어입니다.';
 
   gameState.usedWords.add(chosenWord);
   gameState.currentWord = chosenWord;
 
   io.emit('wordAccepted', {
     player: BOT_PLAYER,
-    word: chosenWord
+    word: chosenWord,
+    definition: chosenDef
   });
 
-  io.emit('systemMessage', `🤖 끄투봇이 네이버 사전 검색을 통해 "${chosenWord}"(을)를 입력했습니다!`);
+  io.emit('systemMessage', `🤖 끄투봇이 "${chosenWord}"(을)를 입력했습니다.`);
   nextTurn();
 }
 
@@ -312,6 +331,9 @@ io.on('connection', (socket) => {
   socket.emit('initSelf', player);
   socket.emit('systemMessage', `📢 ${player.name}(@${player.username})님 환영합니다!`);
 
+  // 방 설정 정보 전달
+  socket.emit('roomInfo', gameState.roomOptions);
+
   if (!gameState.isStarted) {
     gameState.isStarted = true;
     gameState.currentWord = '스타끄투';
@@ -328,6 +350,16 @@ io.on('connection', (socket) => {
       currentPlayer: gameState.players[gameState.currentTurn]
     });
   }
+
+  // 💡 방 옵션 변경 (GM 전용 기능 기초)
+  socket.on('updateRoomOptions', (newOptions) => {
+    if (!player.isGM) {
+      return socket.emit('systemMessage', '❌ GM만 방 옵션을 변경할 수 있습니다.');
+    }
+    gameState.roomOptions = { ...gameState.roomOptions, ...newOptions };
+    io.emit('roomInfo', gameState.roomOptions);
+    io.emit('systemMessage', `⚙️ 방 옵션이 변경되었습니다. (시간: ${gameState.roomOptions.timeLimit}초)`);
+  });
 
   socket.on('submitWord', async (word) => {
     word = word.trim();
@@ -352,19 +384,21 @@ io.on('connection', (socket) => {
       return socket.emit('systemMessage', `❌ '${lastChar}'(으)로 시작해 주세요.`);
     }
 
-    socket.emit('systemMessage', `🔍 "${word}" 네이버 사전 검증 중...`);
-    const isValid = await verifyWordWithNaver(word);
+    socket.emit('systemMessage', `🔍 "${word}" 단어 확인 중...`);
+    const wordInfo = await getWordInfoFromNaver(word);
 
-    if (!isValid) {
+    if (!wordInfo.isValid) {
       return socket.emit('systemMessage', `❌ "${word}"은(는) 네이버 사전에 등재되지 않은 단어입니다.`);
     }
 
     gameState.usedWords.add(word);
     gameState.currentWord = word;
 
+    // 💡 단어와 뜻을 함께 클라이언트에 전달 (왼쪽 뜻 출력용)
     io.emit('wordAccepted', {
       player: currentPlayer,
-      word: word
+      word: word,
+      definition: wordInfo.definition
     });
 
     nextTurn();
