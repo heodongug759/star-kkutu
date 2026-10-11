@@ -117,7 +117,7 @@ app.get('/api/check', async (req, res) => {
 });
 
 // ==========================================
-// 스타 끄투 게임 로직 (완전 API 연동 끄투봇 포함)
+// 스타 끄투 게임 로직 (턴 검증 개선 완료)
 // ==========================================
 const gameState = {
   players: [],
@@ -192,13 +192,12 @@ function nextTurn() {
   
   startTimer();
 
-  // 만약 다음 차례가 봇이라면 자동으로 단어 제출 실행
   if (nextPlayer && nextPlayer.isBot) {
-    setTimeout(handleBotTurn, 2000); // 2초 후 봇이 단어 검색 및 입력
+    setTimeout(handleBotTurn, 2000);
   }
 }
 
-// 🤖 [완전 API 기반] 끄투봇이 우리말샘 API를 조회해서 알맞은 단어를 찾는 로직
+// 🤖 끄투봇 API 기반 단어 제출 로직
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
@@ -207,7 +206,6 @@ async function handleBotTurn() {
 
   let chosenWord = '';
 
-  // 허용되는 시작 글자들 중 API로 실제 단어 검색
   for (const startChar of validFirstChars) {
     try {
       const response = await axios.get(URIMALSEM_URL, {
@@ -216,7 +214,7 @@ async function handleBotTurn() {
           q: startChar,
           req_type: 'json',
           part: 'word',
-          num: 30 // 넉넉하게 가져와서 조건에 맞는 것 탐색
+          num: 30
         }
       });
 
@@ -225,10 +223,8 @@ async function handleBotTurn() {
         const itemList = Array.isArray(items) ? items : [items];
         for (let item of itemList) {
           let rawWord = item.word || '';
-          // HTML 태그, 괄호 등 제거하고 순수 한글만 추출
           let cleanWord = rawWord.replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
 
-          // 2글자 이상이고, 봇이 시작해야 하는 글자로 시작하며, 아직 안 쓴 단어인 경우 선택
           if (cleanWord.length >= 2 && cleanWord.startsWith(startChar) && !gameState.usedWords.has(cleanWord)) {
             chosenWord = cleanWord;
             break;
@@ -242,12 +238,10 @@ async function handleBotTurn() {
     if (chosenWord) break;
   }
 
-  // 만약 API 검색 결과가 마땅치 않을 경우를 대비한 최소한의 안전장치
   if (!chosenWord) {
     chosenWord = lastChar + '나무'; 
   }
 
-  // 봇 단어 등록 및 진행
   gameState.usedWords.add(chosenWord);
   gameState.currentWord = chosenWord;
 
@@ -269,8 +263,9 @@ io.on('connection', (socket) => {
     return;
   }
 
+  // 소켓 연결 시점마다 플레이어 객체 생성 (고유 socket.id 및 username 반영)
   const player = {
-    id: socket.id,
+    socketId: socket.id,
     name: sessionUser.name,
     username: sessionUser.username,
     isGM: sessionUser.isGM,
@@ -279,14 +274,15 @@ io.on('connection', (socket) => {
     isBot: false
   };
 
+  // 기존에 접속해 있던 유저라면 socketId만 갱신, 아니면 추가
   const existingIdx = gameState.players.findIndex(p => p.username === player.username);
   if (existingIdx !== -1) {
-    gameState.players[existingIdx] = player;
+    gameState.players[existingIdx].socketId = socket.id;
   } else {
     gameState.players.push(player);
   }
 
-  // 사람이 접속했을 때 봇이 아직 없으면 봇 추가
+  // 봇이 없으면 추가
   if (!gameState.players.some(p => p.isBot)) {
     gameState.players.push(BOT_PLAYER);
   }
@@ -312,11 +308,12 @@ io.on('connection', (socket) => {
     });
   }
 
+  // 💡 단어 제출 이벤트 (소켓 ID 대신 고유 username으로 철저하게 턴 검증)
   socket.on('submitWord', async (word) => {
     word = word.trim();
     const currentPlayer = gameState.players[gameState.currentTurn];
 
-    if (!currentPlayer || socket.id !== currentPlayer.id) {
+    if (!currentPlayer || currentPlayer.username !== player.username) {
       return socket.emit('systemMessage', '❌ 본인 턴에만 입력 가능합니다.');
     }
 
@@ -370,7 +367,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    const index = gameState.players.findIndex(p => p.id === socket.id);
+    const index = gameState.players.findIndex(p => p.socketId === socket.id);
     if (index !== -1) {
       gameState.players.splice(index, 1);
       
@@ -395,4 +392,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}
