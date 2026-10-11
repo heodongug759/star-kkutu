@@ -69,21 +69,13 @@ app.get('/logout', (req, res) => {
 });
 
 // ==========================================
-// 💡 [네이버 사전 API] 단어 검증 및 뜻(Definition) 조회
+// 네이버 사전 API 검증 및 뜻 조회
 // ==========================================
 async function getWordInfoFromNaver(word) {
   try {
     const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
-      params: {
-        q: word,
-        q_enc: 'utf-8',
-        st: 110,
-        r_format: 'json',
-        r_enc: 'utf-8'
-      },
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      },
+      params: { q: word, q_enc: 'utf-8', st: 110, r_format: 'json', r_enc: 'utf-8' },
+      headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
       timeout: 3000
     });
 
@@ -94,8 +86,7 @@ async function getWordInfoFromNaver(word) {
           for (let item of group) {
             const targetWord = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
             if (targetWord === word) {
-              // 네이버 자동완성 결과에서 뜻(부연 설명) 추출 시도
-              let definition = item[1]?.[0] || '등록된 뜻이 없습니다.';
+              let definition = item[1]?.[0] || '네이버 사전에 등록된 단어입니다.';
               return { isValid: true, definition };
             }
           }
@@ -103,7 +94,7 @@ async function getWordInfoFromNaver(word) {
       }
     }
   } catch (err) {
-    console.error('네이버 사전 API 통신 예외:', err.message);
+    console.error('API 통신 오류:', err.message);
   }
 
   const koreanRegex = /^[가-힣]{2,}$/;
@@ -113,17 +104,8 @@ async function getWordInfoFromNaver(word) {
   return { isValid: false, definition: '' };
 }
 
-app.get('/api/check', async (req, res) => {
-  const word = req.query.word;
-  if (!word || word.length < 2) {
-    return res.json({ isValid: false });
-  }
-  const result = await getWordInfoFromNaver(word);
-  res.json({ isValid: result.isValid });
-});
-
 // ==========================================
-// 게임 룸 및 상태 관리
+// 게임 상태 관리
 // ==========================================
 const gameState = {
   players: [],
@@ -132,12 +114,7 @@ const gameState = {
   usedWords: new Set(),
   timer: null,
   timeLeft: 15,
-  isStarted: false,
-  roomOptions: {
-    title: '스타 끄투 기본 방',
-    mannerMode: true, // 매너 모드 (욕설/비속어 필터링 등)
-    timeLimit: 15
-  }
+  isStarted: false
 };
 
 const BOT_PLAYER = {
@@ -175,7 +152,7 @@ function getValidNextChars(char) {
 
 function startTimer() {
   clearInterval(gameState.timer);
-  gameState.timeLeft = gameState.roomOptions.timeLimit;
+  gameState.timeLeft = 15;
   io.emit('timerTick', gameState.timeLeft);
 
   gameState.timer = setInterval(() => {
@@ -208,7 +185,7 @@ function nextTurn() {
   }
 }
 
-// 🤖 [골고루 단어 선택] 네이버 사전 API에서 후보군을 모아 무작위로 선택하는 끄투봇
+// 🤖 [순수 네이버 API 연동] 봇이 실시간으로 API에서 다양한 단어를 조회해 무작위 채택
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
@@ -220,16 +197,8 @@ async function handleBotTurn() {
   for (const startChar of validFirstChars) {
     try {
       const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
-        params: {
-          q: startChar,
-          q_enc: 'utf-8',
-          st: 110,
-          r_format: 'json',
-          r_enc: 'utf-8'
-        },
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        },
+        params: { q: startChar, q_enc: 'utf-8', st: 110, r_format: 'json', r_enc: 'utf-8' },
+        headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
         timeout: 3000
       });
 
@@ -239,34 +208,33 @@ async function handleBotTurn() {
           if (Array.isArray(group)) {
             for (let item of group) {
               const cleanWord = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
+              const definition = item[1]?.[0] || '네이버 사전에 등록된 단어입니다.';
+              
               if (
                 cleanWord.length >= 2 &&
                 cleanWord.startsWith(startChar) &&
                 !gameState.usedWords.has(cleanWord)
               ) {
-                candidateWords.push({
-                  word: cleanWord,
-                  def: item[1]?.[0] || '뜻 없음'
-                });
+                candidateWords.push({ word: cleanWord, def: definition });
               }
             }
           }
         }
       }
     } catch (err) {
-      console.error('봇 단어 수집 오류:', err.message);
+      console.error('봇 API 검색 오류:', err.message);
     }
   }
 
   let chosenObj = null;
   if (candidateWords.length > 0) {
-    // 무작위로 하나 골라서 편중 방지
+    // API 검색 결과들 중 무작위로 하나를 선택하여 다양성 확보
     const randomIndex = Math.floor(Math.random() * candidateWords.length);
     chosenObj = candidateWords[randomIndex];
   }
 
-  const chosenWord = chosenObj ? chosenObj.word : lastChar + '나무';
-  const chosenDef = chosenObj ? chosenObj.def : '기본 단어입니다.';
+  const chosenWord = chosenObj ? chosenObj.word : (lastChar + '나무');
+  const chosenDef = chosenObj ? chosenObj.def : '네이버 사전 자동 연동 단어입니다.';
 
   gameState.usedWords.add(chosenWord);
   gameState.currentWord = chosenWord;
@@ -277,7 +245,7 @@ async function handleBotTurn() {
     definition: chosenDef
   });
 
-  io.emit('systemMessage', `🤖 끄투봇이 "${chosenWord}"(을)를 입력했습니다.`);
+  io.emit('systemMessage', `🤖 끄투봇이 네이버 사전 API에서 "${chosenWord}"(을)를 찾아 입력했습니다.`);
   nextTurn();
 }
 
@@ -315,13 +283,12 @@ io.on('connection', (socket) => {
   socket.emit('initSelf', player);
   socket.emit('systemMessage', `📢 ${player.name}(@${player.username})님 환영합니다!`);
 
-  // 방 설정 정보 전달
-  socket.emit('roomInfo', gameState.roomOptions);
-
   if (!gameState.isStarted) {
     gameState.isStarted = true;
     gameState.currentWord = '스타끄투';
+    gameState.usedWords.clear();
     gameState.usedWords.add('스타끄투');
+    gameState.currentTurn = 0;
     
     io.emit('gameStart', {
       currentWord: gameState.currentWord,
@@ -334,16 +301,6 @@ io.on('connection', (socket) => {
       currentPlayer: gameState.players[gameState.currentTurn]
     });
   }
-
-  // 💡 방 옵션 변경 (GM 전용 기능 기초)
-  socket.on('updateRoomOptions', (newOptions) => {
-    if (!player.isGM) {
-      return socket.emit('systemMessage', '❌ GM만 방 옵션을 변경할 수 있습니다.');
-    }
-    gameState.roomOptions = { ...gameState.roomOptions, ...newOptions };
-    io.emit('roomInfo', gameState.roomOptions);
-    io.emit('systemMessage', `⚙️ 방 옵션이 변경되었습니다. (시간: ${gameState.roomOptions.timeLimit}초)`);
-  });
 
   socket.on('submitWord', async (word) => {
     word = word.trim();
@@ -378,7 +335,6 @@ io.on('connection', (socket) => {
     gameState.usedWords.add(word);
     gameState.currentWord = word;
 
-    // 💡 단어와 뜻을 함께 클라이언트에 전달 (왼쪽 뜻 출력용)
     io.emit('wordAccepted', {
       player: currentPlayer,
       word: word,
@@ -398,6 +354,7 @@ io.on('connection', (socket) => {
         clearInterval(gameState.timer);
         gameState.isStarted = false;
         gameState.usedWords.clear();
+        gameState.usedWords.add('스타끄투');
         gameState.players = [];
       } else {
         if (!gameState.players.some(p => p.isBot)) {
@@ -406,7 +363,6 @@ io.on('connection', (socket) => {
         io.emit('updatePlayers', gameState.players);
         if (gameState.currentTurn >= gameState.players.length) {
           gameState.currentTurn = 0;
-          nextTurn();
         }
       }
     }
@@ -414,4 +370,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`🚀 서버 구동 완료: http://localhost:${PORT}`));
