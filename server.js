@@ -262,9 +262,7 @@ io.on('connection', (socket) => {
 
     nextTurn();
   });
-
-  // 기존 socket.on('submitWord', ...) 부분을 아래 코드로 교체하세요!
-  socket.on('submitWord', async (word) => {
+ socket.on('submitWord', async (word) => {
     word = word.trim();
     const currentPlayer = gameState.players[gameState.currentTurn];
 
@@ -288,7 +286,7 @@ io.on('connection', (socket) => {
     }
 
     // ==========================================
-    // 💡 [추가된 부분] 우리말샘 API로 실제 등재 여부 확인
+    // 💡 [수정된 부분] 우리말샘 API 정확한 단어 일치 검증
     // ==========================================
     socket.emit('systemMessage', `🔍 "${word}" 단어 확인 중...`);
     
@@ -299,15 +297,34 @@ io.on('connection', (socket) => {
                 q: word,
                 req_type: "json",
                 part: "word",
-                num: 1
+                num: 10 // 넉넉하게 여러 개 받아와서 정확히 일치하는지 확인
             }
         });
 
-        const total = parseInt(response.data.channel?.total || 0);
-        
-        if (total === 0) {
+        const channel = response.data.channel;
+        const items = channel?.item;
+
+        if (!items || channel.total === '0' || parseInt(channel.total || 0) === 0) {
             return socket.emit('systemMessage', `❌ "${word}"은(는) 우리말샘에 등재되지 않은 단어입니다.`);
         }
+
+        // API가 반환한 결과 중 사용자가 입력한 단어와 형태가 '완전히 일치'하는 항목이 있는지 확인
+        const itemList = Array.isArray(items) ? items : [items];
+        let isValidWord = false;
+
+        for (let item of itemList) {
+            // 태그(<xml> 등에서 파싱되거나 정제된 형태)나 공백을 제거한 순수 단어 추출
+            const targetWord = item.word ? item.word.replace(/[^가-힣]/g, '') : '';
+            if (targetWord === word) {
+                isValidWord = true;
+                break;
+            }
+        }
+
+        if (!isValidWord) {
+            return socket.emit('systemMessage', `❌ "${word}"은(는) 끄투에서 인정하지 않는 유효하지 않은 형태의 단어입니다.`);
+        }
+
     } catch (error) {
         console.error(error);
         return socket.emit('systemMessage', '❌ 단어 검증 중 서버 오류가 발생했습니다.');
