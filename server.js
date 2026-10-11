@@ -36,7 +36,6 @@ app.use(express.static(path.join(__dirname, 'public')));
 passport.use(new GitHubStrategy({
     clientID: GITHUB_CLIENT_ID,
     clientSecret: GITHUB_CLIENT_SECRET,
-    // Render 환경에서는 환경변수나 실제 URL을 바라보도록 설정
     callbackURL: process.env.CALLBACK_URL || "https://star-kkutu.onrender.com/auth/github/callback"
   },
   (accessToken, refreshToken, profile, done) => {
@@ -79,6 +78,42 @@ app.get('/logout', (req, res) => {
   req.logout(() => {
     res.redirect('/');
   });
+});
+
+// ==========================================
+// 공공데이터 우리말샘 API 단어 검증 라우트
+// ==========================================
+const URIMALSEM_API_KEY = "29ea410f-f9ec-4e8d-adfd-d7a6800565d1";
+const URIMALSEM_URL = "https://opendict.korean.go.kr/api/search";
+
+app.get('/api/check', async (req, res) => {
+    const word = req.query.word;
+    if (!word) {
+        return res.json({ isValid: false });
+    }
+    
+    try {
+        const response = await axios.get(URIMALSEM_URL, {
+            params: {
+                key: URIMALSEM_API_KEY,
+                q: word,
+                req_type: "json",
+                part: "word",
+                num: 1
+            }
+        });
+
+        const total = parseInt(response.data.channel?.total || 0);
+        
+        if (total > 0) {
+            res.json({ isValid: true });
+        } else {
+            res.json({ isValid: false });
+        }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "API 요청 실패" });
+    }
 });
 
 // ==========================================
@@ -248,40 +283,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-// ==========================================
-// [추가할 부분] 공공데이터 우리말샘 API 단어 검증 라우트
-// =========================================
-
-const URIMALSEM_API_KEY = "29ea410f-f9ec-4e8d-adfd-d7a6800565d1";
-const URIMALSEM_URL = "https://opendict.korean.go.kr/api/search";
-
-app.get('/api/check', async (req, res) => {
-    const word = req.query.word;
-    if (!word) {
-        return res.json({ isValid: false });
-    }
-    
-    try {
-        const response = await axios.get(URIMALSEM_URL, {
-            params: {
-                key: URIMALSEM_API_KEY,
-                q: word,
-                req_type: "json",
-                part: "word",
-                num: 1
-            }
-        });
-
-        const total = parseInt(response.data.channel?.total || 0);
-        
-        if (total > 0) {
-            res.json({ isValid: true });
-        } else {
-            res.json({ isValid: false });
-        }
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "API 요청 실패" });
-    }
-});
 server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}`));
