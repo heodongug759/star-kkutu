@@ -247,4 +247,41 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
+// ==========================================
+// [추가할 부분] 공공데이터 우리말샘 API 단어 검증 라우트
+// ==========================================
+const axios = require('axios'); // axios 모듈이 맨 위에 require 되어있어야 합니다!
+
+const URIMALSEM_API_KEY = "여러분의_공공데이터포털_인증키";
+const URIMALSEM_URL = "https://opendict.korean.go.kr/api/search";
+
+app.get('/api/check', async (req, res) => {
+    const word = req.query.word;
+    if (!word) {
+        return res.json({ isValid: false });
+    }
+    
+    try {
+        const response = await axios.get(URIMALSEM_URL, {
+            params: {
+                key: URIMALSEM_API_KEY,
+                q: word,
+                req_type: "json",
+                part: "word",
+                num: 1
+            }
+        });
+
+        const total = parseInt(response.data.channel?.total || 0);
+        
+        if (total > 0) {
+            res.json({ isValid: true });
+        } else {
+            res.json({ isValid: false });
+        }
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "API 요청 실패" });
+    }
+});
 server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}`));
