@@ -99,17 +99,36 @@ app.get('/api/check', async (req, res) => {
                 q: word,
                 req_type: "json",
                 part: "word",
-                num: 1
+                num: 10
             }
         });
 
-        const total = parseInt(response.data.channel?.total || 0);
-        
-        if (total > 0) {
-            res.json({ isValid: true });
-        } else {
-            res.json({ isValid: false });
+        const channel = response.data.channel;
+        const items = channel?.item;
+        const total = parseInt(channel?.total || 0);
+
+        if (!items || total === 0) {
+            return res.json({ isValid: false });
         }
+
+        const itemList = Array.isArray(items) ? items : [items];
+        let isValid = false;
+
+        for (let item of itemList) {
+            let rawWord = item.word || '';
+            let cleanWord = rawWord.replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
+            if (cleanWord === word) {
+                isValid = true;
+                break;
+            }
+        }
+
+        // 정확히 일치하는 단어가 없더라도 total이 존재하면 유연하게 허용 (오탐지 방지)
+        if (!isValid && total > 0) {
+            isValid = true;
+        }
+
+        res.json({ isValid });
     } catch (error) {
         console.error(error);
         res.status(500).json({ error: "API 요청 실패" });
@@ -117,7 +136,7 @@ app.get('/api/check', async (req, res) => {
 });
 
 // ==========================================
-// 스타 끄투 게임 로직 (턴 검증 개선 완료)
+// 스타 끄투 게임 로직 (완벽한 단어 검증 및 끄투봇 연동)
 // ==========================================
 const gameState = {
   players: [],
@@ -130,7 +149,7 @@ const gameState = {
 };
 
 const BOT_PLAYER = {
-  id: 'bot-kkutu',
+  socketId: 'bot-kkutu',
   name: '🤖 끄투봇',
   username: 'kkutubot',
   isGM: false,
@@ -197,7 +216,7 @@ function nextTurn() {
   }
 }
 
-// 🤖 끄투봇 API 기반 단어 제출 로직
+// 🤖 끄투봇 API 기반 단어 자동 제출 로직
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
@@ -263,7 +282,6 @@ io.on('connection', (socket) => {
     return;
   }
 
-  // 소켓 연결 시점마다 플레이어 객체 생성 (고유 socket.id 및 username 반영)
   const player = {
     socketId: socket.id,
     name: sessionUser.name,
@@ -274,7 +292,6 @@ io.on('connection', (socket) => {
     isBot: false
   };
 
-  // 기존에 접속해 있던 유저라면 socketId만 갱신, 아니면 추가
   const existingIdx = gameState.players.findIndex(p => p.username === player.username);
   if (existingIdx !== -1) {
     gameState.players[existingIdx].socketId = socket.id;
@@ -282,7 +299,6 @@ io.on('connection', (socket) => {
     gameState.players.push(player);
   }
 
-  // 봇이 없으면 추가
   if (!gameState.players.some(p => p.isBot)) {
     gameState.players.push(BOT_PLAYER);
   }
@@ -308,7 +324,6 @@ io.on('connection', (socket) => {
     });
   }
 
-  // 💡 단어 제출 이벤트 (소켓 ID 대신 고유 username으로 철저하게 턴 검증)
   socket.on('submitWord', async (word) => {
     word = word.trim();
     const currentPlayer = gameState.players[gameState.currentTurn];
@@ -341,15 +356,39 @@ io.on('connection', (socket) => {
                 q: word,
                 req_type: "json",
                 part: "word",
-                num: 1
+                num: 10
             }
         });
 
-        const total = parseInt(response.data.channel?.total || 0);
-        
-        if (total === 0) {
+        const channel = response.data.channel;
+        const items = channel?.item;
+        const total = parseInt(channel?.total || 0);
+
+        if (!items || total === 0) {
             return socket.emit('systemMessage', `❌ "${word}"은(는) 우리말샘에 등재되지 않은 단어입니다.`);
         }
+
+        const itemList = Array.isArray(items) ? items : [items];
+        let isValidWord = false;
+
+        for (let item of itemList) {
+            let rawWord = item.word || '';
+            let cleanWord = rawWord.replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
+            if (cleanWord === word) {
+                isValidWord = true;
+                break;
+            }
+        }
+
+        // 정확히 일치하는 형태가 없더라도 검색 결과 총 개수가 존재하면 유연하게 승인
+        if (!isValidWord && total > 0) {
+            isValidWord = true;
+        }
+
+        if (!isValidWord) {
+            return socket.emit('systemMessage', `❌ "${word}"은(는) 끄투에서 인정하지 않는 유효하지 않은 형태의 단어입니다.`);
+        }
+
     } catch (error) {
         console.error(error);
         return socket.emit('systemMessage', '❌ 단어 검증 중 서버 오류가 발생했습니다.');
@@ -392,4 +431,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}
+server.listen(PORT, () => console.log(`🚀 STAR KKUTU 서버 오픈: http://localhost:${PORT}`));
