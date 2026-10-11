@@ -76,7 +76,7 @@ async function getWordInfoFromNaver(word) {
     const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
       params: { q: word, q_enc: 'utf-8', st: 110, r_format: 'json', r_enc: 'utf-8' },
       headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
-      timeout: 3000
+      timeout: 3500
     });
 
     const items = response.data?.items;
@@ -112,13 +112,13 @@ async function getWordInfoFromNaver(word) {
   return { isValid: false, definition: '' };
 }
 
-// 💡 특정 글자로 시작하는 유효한 단어가 존재하는지 확인 (한방단어 판별용)
+// 💡 [개선] 한방단어 판별 억까 방지검증 로직
 async function hasNextWords(char) {
   try {
     const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
-      params: { q: char, q_enc: 'utf-8', st: 110, r_format: 'json', r_enc: 'utf-8' },
+      params: { q: char, q_enc: 'utf-8', st: 111, r_format: 'json', r_enc: 'utf-8' },
       headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
-      timeout: 2500
+      timeout: 3500
     });
     const items = response.data?.items;
     if (items && Array.isArray(items)) {
@@ -127,7 +127,7 @@ async function hasNextWords(char) {
           for (let item of group) {
             const w = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
             if (w.length >= 2 && w.startsWith(char)) {
-              return true; // 이어갈 수 있는 단어가 존재함
+              return true; // 이어갈 수 있는 단어 명확히 존재
             }
           }
         }
@@ -135,8 +135,9 @@ async function hasNextWords(char) {
     }
   } catch (err) {
     console.error('다음 단어 검증 오류:', err.message);
+    return true; // API 실패 시 억울한 한방 판정을 피하기 위해 안전하게 true 처리
   }
-  return false; // 이어갈 단어 없음 (한방단어)
+  return false;
 }
 
 // ==========================================
@@ -166,7 +167,7 @@ function getValidNextChars(char) {
   return chars;
 }
 
-// 💡 한방단어 판별 로직 (끝글자 및 두음법칙 변환 글자 모두에 이어갈 단어가 없는지 확인)
+// 💡 한방단어 정밀 판별
 async function isOneShotWord(word) {
   const lastChar = word.slice(-1);
   const possibleNextChars = [];
@@ -177,9 +178,9 @@ async function isOneShotWord(word) {
 
   for (let c of checkChars) {
     const hasNext = await hasNextWords(c);
-    if (hasNext) return false; // 이어갈 수 있는 단어가 하나라도 있으므로 한방단어 아님
+    if (hasNext) return false; // 하나라도 이어갈 수 있으면 절대 한방단어가 아님!
   }
-  return true; // 진정한 한방단어 (이어갈 단어가 전혀 없음)
+  return true;
 }
 
 // ==========================================
@@ -193,7 +194,7 @@ const gameState = {
   timer: null,
   timeLeft: 15,
   isStarted: false,
-  allowOneShot: false // 기본값: 한방단어 불허 (자체 거부)
+  allowOneShot: false
 };
 
 const BOT_PLAYER = {
@@ -224,7 +225,6 @@ function startTimer() {
   }, 1000);
 }
 
-// 💡 턴 전환 시 현재 플레이어가 한방단어를 당했는지(이어갈 단어가 없는지) 체크
 async function checkAndHandleTurn() {
   if (gameState.players.length === 0) return;
   const currentPlayer = gameState.players[gameState.currentTurn];
@@ -245,7 +245,6 @@ async function checkAndHandleTurn() {
   }
 
   if (!hasAnyMove && gameState.allowOneShot) {
-    // 한방단어 허용 규칙 하에서 갈 곳이 없는 경우 -> 패배 처리
     io.emit('systemMessage', `💥 한방단어 "${gameState.currentWord}"에 당해 ${currentPlayer.name}님이 패배하셨습니다! 새 게임을 시작합니다.`);
     resetGameToDefault();
     return;
@@ -299,7 +298,7 @@ async function handleBotTurn() {
       const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
         params: { q: startChar, q_enc: 'utf-8', st: 110, r_format: 'json', r_enc: 'utf-8' },
         headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36' },
-        timeout: 2500
+        timeout: 3000
       });
 
       const items = response.data?.items;
@@ -318,7 +317,6 @@ async function handleBotTurn() {
                 validFirstChars.some(sc => cleanWord.startsWith(sc)) &&
                 !gameState.usedWords.has(cleanWord)
               ) {
-                // 봇은 한방단어 허용 여부와 무관하게 가급적 한방단어 안 쓰거나, 허용되면 쓸 수 있음
                 if (cleanWord.endsWith('무')) {
                   secondaryCandidates.push({ word: cleanWord, def: definition });
                 } else {
@@ -396,7 +394,6 @@ io.on('connection', (socket) => {
   socket.emit('initSelf', player);
   socket.emit('systemMessage', `📢 ${player.name}(@${player.username})님 환영합니다!`);
 
-  // 방 설정 (한방단어 허용 여부 등) 동기화 전송
   socket.emit('gameOptions', { allowOneShot: gameState.allowOneShot });
 
   if (!gameState.isStarted) {
@@ -418,7 +415,6 @@ io.on('connection', (socket) => {
     });
   }
 
-  // 💡 한방단어 설정 변경 토글 처리
   socket.on('toggleOneShot', (allowed) => {
     gameState.allowOneShot = allowed;
     io.emit('gameOptions', { allowOneShot: gameState.allowOneShot });
@@ -468,7 +464,6 @@ io.on('connection', (socket) => {
       return socket.emit('systemMessage', `❌ "${word}"은(는) 네이버 사전에 등재되지 않은 단어입니다.`);
     }
 
-    // 💡 한방단어 여부 체크 및 자체 거부 로직
     const isOneShot = await isOneShotWord(word);
     if (isOneShot && !gameState.allowOneShot) {
       return socket.emit('systemMessage', `❌ "${word}"은(는) 한방단어입니다. 현재 설정상 한방단어는 사용할 수 없습니다!`);
