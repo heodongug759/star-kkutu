@@ -17,7 +17,7 @@ const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || 'Ov23lizVNA79tofTb34u';
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || '641a36180151bd9b665fc8e4bc464be9eacf33bd';
 
 // GM 권한을 줄 깃허브 닉네임(Username) 목록
-const GM_USERNAMES = ['heodongug759', 'admin'];
+const GM_USERNAMES = 'heodongug759';
 
 // 세션 설정
 const sessionMiddleware = session({
