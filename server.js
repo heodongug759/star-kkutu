@@ -250,8 +250,7 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 // ==========================================
 // [추가할 부분] 공공데이터 우리말샘 API 단어 검증 라우트
-// ==========================================
-const axios = require('axios'); // axios 모듈이 맨 위에 require 되어있어야 합니다!
+// =========================================
 
 const URIMALSEM_API_KEY = "29ea410f-f9ec-4e8d-adfd-d7a6800565d1";
 const URIMALSEM_URL = "https://opendict.korean.go.kr/api/search";
