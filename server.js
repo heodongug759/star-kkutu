@@ -252,7 +252,7 @@ const PORT = process.env.PORT || 3000;
 // ==========================================
 const axios = require('axios'); // axios 모듈이 맨 위에 require 되어있어야 합니다!
 
-const URIMALSEM_API_KEY = "여러분의_공공데이터포털_인증키";
+const URIMALSEM_API_KEY = "29ea410f-f9ec-4e8d-adfd-d7a6800565d1";
 const URIMALSEM_URL = "https://opendict.korean.go.kr/api/search";
 
 app.get('/api/check', async (req, res) => {
