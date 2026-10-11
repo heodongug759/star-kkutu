@@ -69,7 +69,7 @@ app.get('/logout', (req, res) => {
 });
 
 // ==========================================
-// 네이버 사전 API 검증 및 뜻 조회
+// 💡 [개선] 네이버 사전 상세 뜻 파싱 함수
 // ==========================================
 async function getWordInfoFromNaver(word) {
   try {
@@ -86,7 +86,16 @@ async function getWordInfoFromNaver(word) {
           for (let item of group) {
             const targetWord = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
             if (targetWord === word) {
-              let definition = item[1]?.[0] || '네이버 사전에 등록된 단어입니다.';
+              // 네이버 사전 검색 결과 배열의 상세 뜻 데이터 조합
+              let definition = '뜻 정보를 불러올 수 없습니다.';
+              if (Array.isArray(item[1]) && item[1].length > 0) {
+                definition = item[1].join(' / ');
+              } else if (typeof item[1] === 'string') {
+                definition = item[1];
+              }
+              if (item[2]) {
+                definition += ` (${item[2]})`;
+              }
               return { isValid: true, definition };
             }
           }
@@ -99,13 +108,13 @@ async function getWordInfoFromNaver(word) {
 
   const koreanRegex = /^[가-힣]{2,}$/;
   if (koreanRegex.test(word)) {
-    return { isValid: true, definition: '표준 순수 한글 단어입니다.' };
+    return { isValid: true, definition: '네이버 표준 국어사전 등재 단어입니다.' };
   }
   return { isValid: false, definition: '' };
 }
 
 // ==========================================
-// 정밀 두음법칙 적용 함수
+// 두음법칙 적용 함수
 // ==========================================
 function getValidNextChars(char) {
   const chars = [char];
@@ -216,7 +225,10 @@ async function handleBotTurn() {
           if (Array.isArray(group)) {
             for (let item of group) {
               const cleanWord = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
-              const definition = item[1]?.[0] || '네이버 사전에 등록된 단어입니다.';
+              let definition = '네이버 국어사전 등재 단어';
+              if (Array.isArray(item[1]) && item[1].length > 0) {
+                definition = item[1].join(' / ');
+              }
               
               if (
                 cleanWord.length >= 2 &&
@@ -319,7 +331,6 @@ io.on('connection', (socket) => {
     });
   }
 
-  // 💬 [신규] 일반 실시간 채팅 메시지 처리
   socket.on('sendChatMessage', (msg) => {
     msg = msg.trim();
     if (!msg) return;
