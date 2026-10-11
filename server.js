@@ -185,14 +185,15 @@ function nextTurn() {
   }
 }
 
-// 🤖 [순수 네이버 API 연동] 봇이 실시간으로 API에서 다양한 단어를 조회해 무작위 채택
+// 🤖 [개선] '무'로 끝나는 단어 배제 및 무작위 선택 봇 로직
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
   const lastChar = gameState.currentWord.slice(-1);
   const validFirstChars = getValidNextChars(lastChar);
 
-  let candidateWords = [];
+  let primaryCandidates = [];   // '무'로 끝나지 않는 우선 후보군
+  let secondaryCandidates = []; // 어쩔 수 없을 때 쓸 보조 후보군
 
   for (const startChar of validFirstChars) {
     try {
@@ -215,7 +216,12 @@ async function handleBotTurn() {
                 cleanWord.startsWith(startChar) &&
                 !gameState.usedWords.has(cleanWord)
               ) {
-                candidateWords.push({ word: cleanWord, def: definition });
+                // 💡 '무'로 끝나는 단어는 우선 순위에서 제외
+                if (cleanWord.endsWith('무')) {
+                  secondaryCandidates.push({ word: cleanWord, def: definition });
+                } else {
+                  primaryCandidates.push({ word: cleanWord, def: definition });
+                }
               }
             }
           }
@@ -227,13 +233,23 @@ async function handleBotTurn() {
   }
 
   let chosenObj = null;
-  if (candidateWords.length > 0) {
-    // API 검색 결과들 중 무작위로 하나를 선택하여 다양성 확보
-    const randomIndex = Math.floor(Math.random() * candidateWords.length);
-    chosenObj = candidateWords[randomIndex];
+
+  // 1순위: '무'로 끝나지 않는 단어 중 랜덤 선택
+  if (primaryCandidates.length > 0) {
+    const randomIndex = Math.floor(Math.random() * primaryCandidates.length);
+    chosenObj = primaryCandidates[randomIndex];
+  } 
+  // 2순위: 적절한 단어가 없을 때 보조 단어 중 랜덤 선택
+  else if (secondaryCandidates.length > 0) {
+    const randomIndex = Math.floor(Math.random() * secondaryCandidates.length);
+    chosenObj = secondaryCandidates[randomIndex];
   }
 
-  const chosenWord = chosenObj ? chosenObj.word : (lastChar + '나무');
+  // 예외 시 무작위 안전 단어 생성 (단일 '나무' 고정 방지)
+  const safeEndings = ['가방', '나비', '구름', '기차', '지구', '바다', '사람', '사진'];
+  const randomEnding = safeEndings[Math.floor(Math.random() * safeEndings.length)];
+
+  const chosenWord = chosenObj ? chosenObj.word : (lastChar + randomEnding.slice(1));
   const chosenDef = chosenObj ? chosenObj.def : '네이버 사전 자동 연동 단어입니다.';
 
   gameState.usedWords.add(chosenWord);
