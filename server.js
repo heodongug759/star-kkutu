@@ -1,3 +1,5 @@
+JavaScript
+
 const axios = require('axios');
 const express = require('express');
 const http = require('http');
@@ -105,6 +107,33 @@ async function getWordInfoFromNaver(word) {
 }
 
 // ==========================================
+// 정밀 두음법칙 적용 함수
+// ==========================================
+function getValidNextChars(char) {
+  const chars = [char];
+  const code = char.charCodeAt(0) - 0xac00;
+  if (code < 0 || code > 11172) return chars;
+
+  const initial = Math.floor(code / 588);
+  const vowel = Math.floor((code % 588) / 28);
+  const tail = code % 28;
+
+  if (initial === 5) { // ㄹ
+    if ([2, 3, 6, 7, 12, 17, 20].includes(vowel)) {
+      chars.push(String.fromCharCode(0xac00 + (11 * 588) + (vowel * 28) + tail));
+    } else {
+      chars.push(String.fromCharCode(0xac00 + (2 * 588) + (vowel * 28) + tail));
+    }
+  } else if (initial === 2) { // ㄴ
+    if ([2, 3, 6, 7, 12, 17, 20].includes(vowel)) {
+      chars.push(String.fromCharCode(0xac00 + (11 * 588) + (vowel * 28) + tail));
+    }
+  }
+
+  return chars;
+}
+
+// ==========================================
 // 게임 상태 관리
 // ==========================================
 const gameState = {
@@ -126,29 +155,6 @@ const BOT_PLAYER = {
   bg: 'bot-bg',
   isBot: true
 };
-
-function getValidNextChars(char) {
-  const chars = [char];
-  const code = char.charCodeAt(0) - 0xac00;
-  if (code < 0 || code > 11172) return chars;
-
-  const initial = Math.floor(code / 588);
-  const vowel = Math.floor((code % 588) / 28);
-  const tail = code % 28;
-
-  if (initial === 5) {
-    if ([2, 4, 18, 20].includes(vowel)) {
-      chars.push(String.fromCharCode(0xac00 + (11 * 588) + (vowel * 28) + tail));
-    } else {
-      chars.push(String.fromCharCode(0xac00 + (2 * 588) + (vowel * 28) + tail));
-    }
-  } else if (initial === 2) {
-    if ([2, 4, 18, 20].includes(vowel)) {
-      chars.push(String.fromCharCode(0xac00 + (11 * 588) + (vowel * 28) + tail));
-    }
-  }
-  return chars;
-}
 
 function startTimer() {
   clearInterval(gameState.timer);
@@ -185,15 +191,18 @@ function nextTurn() {
   }
 }
 
-// 🤖 [개선] '무'로 끝나는 단어 배제 및 무작위 선택 봇 로직
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
   const lastChar = gameState.currentWord.slice(-1);
-  const validFirstChars = getValidNextChars(lastChar);
+  const possibleStartChars = [];
+  getValidNextChars(lastChar).forEach(char => {
+    possibleStartChars.push(...getValidNextChars(char));
+  });
+  const validFirstChars = [...new Set([lastChar, ...possibleStartChars])];
 
-  let primaryCandidates = [];   // '무'로 끝나지 않는 우선 후보군
-  let secondaryCandidates = []; // 어쩔 수 없을 때 쓸 보조 후보군
+  let primaryCandidates = [];
+  let secondaryCandidates = [];
 
   for (const startChar of validFirstChars) {
     try {
@@ -213,10 +222,9 @@ async function handleBotTurn() {
               
               if (
                 cleanWord.length >= 2 &&
-                cleanWord.startsWith(startChar) &&
+                validFirstChars.some(sc => cleanWord.startsWith(sc)) &&
                 !gameState.usedWords.has(cleanWord)
               ) {
-                // 💡 '무'로 끝나는 단어는 우선 순위에서 제외
                 if (cleanWord.endsWith('무')) {
                   secondaryCandidates.push({ word: cleanWord, def: definition });
                 } else {
@@ -233,19 +241,14 @@ async function handleBotTurn() {
   }
 
   let chosenObj = null;
-
-  // 1순위: '무'로 끝나지 않는 단어 중 랜덤 선택
   if (primaryCandidates.length > 0) {
     const randomIndex = Math.floor(Math.random() * primaryCandidates.length);
     chosenObj = primaryCandidates[randomIndex];
-  } 
-  // 2순위: 적절한 단어가 없을 때 보조 단어 중 랜덤 선택
-  else if (secondaryCandidates.length > 0) {
+  } else if (secondaryCandidates.length > 0) {
     const randomIndex = Math.floor(Math.random() * secondaryCandidates.length);
     chosenObj = secondaryCandidates[randomIndex];
   }
 
-  // 예외 시 무작위 안전 단어 생성 (단일 '나무' 고정 방지)
   const safeEndings = ['가방', '나비', '구름', '기차', '지구', '바다', '사람', '사진'];
   const randomEnding = safeEndings[Math.floor(Math.random() * safeEndings.length)];
 
@@ -318,6 +321,16 @@ io.on('connection', (socket) => {
     });
   }
 
+  // 💬 [신규] 일반 실시간 채팅 메시지 처리
+  socket.on('sendChatMessage', (msg) => {
+    msg = msg.trim();
+    if (!msg) return;
+    io.emit('chatMessage', {
+      sender: player,
+      message: msg
+    });
+  });
+
   socket.on('submitWord', async (word) => {
     word = word.trim();
     const currentPlayer = gameState.players[gameState.currentTurn];
@@ -335,10 +348,14 @@ io.on('connection', (socket) => {
     }
 
     const lastChar = gameState.currentWord.slice(-1);
-    const validFirstChars = getValidNextChars(lastChar);
+    const validFirstChars = [];
+    getValidNextChars(lastChar).forEach(char => {
+      validFirstChars.push(...getValidNextChars(char));
+    });
+    const allowedChars = [...new Set([lastChar, ...validFirstChars])];
 
-    if (!validFirstChars.includes(word[0])) {
-      return socket.emit('systemMessage', `❌ '${lastChar}'(으)로 시작해 주세요.`);
+    if (!allowedChars.includes(word[0])) {
+      return socket.emit('systemMessage', `❌ '${lastChar}'(두음법칙 포함)로 시작해 주세요.`);
     }
 
     socket.emit('systemMessage', `🔍 "${word}" 단어 확인 중...`);
@@ -363,7 +380,9 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const index = gameState.players.findIndex(p => p.socketId === socket.id);
     if (index !== -1) {
+      const leftPlayer = gameState.players[index];
       gameState.players.splice(index, 1);
+      io.emit('systemMessage', `🚪 ${leftPlayer.name}님이 퇴장하셨습니다.`);
       
       const humanPlayers = gameState.players.filter(p => !p.isBot);
       if (humanPlayers.length === 0) {
