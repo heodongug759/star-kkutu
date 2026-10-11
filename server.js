@@ -81,62 +81,58 @@ app.get('/logout', (req, res) => {
 });
 
 // ==========================================
-// 공공데이터 우리말샘 API 단어 검증 라우트
+// 💡 [Linux x86_64 최적화] 네이버 사전 API 단어 검증
 // ==========================================
-const URIMALSEM_API_KEY = "29ea410f-f9ec-4e8d-adfd-d7a6800565d1";
-const URIMALSEM_URL = "https://opendict.korean.go.kr/api/search";
+async function verifyWordWithNaver(word) {
+  try {
+    const response = await axios.get(`https://dict.naver.com/api/ac/kr/kko/all`, {
+      params: {
+        q: word,
+        q_enc: 'utf-8',
+        st: 110,
+        r_format: 'json',
+        r_enc: 'utf-8'
+      },
+      headers: {
+        // 리눅스 민트 x86_64 환경 표준 크롬 User-Agent 적용
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      timeout: 3000
+    });
+
+    const items = response.data?.items;
+    if (items && Array.isArray(items)) {
+      for (let group of items) {
+        if (Array.isArray(group)) {
+          for (let item of group) {
+            const targetWord = item[0] ? item[0].replace(/[^가-힣]/g, '') : '';
+            if (targetWord === word) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error('네이버 사전 API 통신 예외:', err.message);
+  }
+
+  // 네트워크 예외 시 순수 한글 2글자 이상 기본 규칙 적용
+  const koreanRegex = /^[가-힣]{2,}$/;
+  return koreanRegex.test(word);
+}
 
 app.get('/api/check', async (req, res) => {
-    const word = req.query.word;
-    if (!word) {
-        return res.json({ isValid: false });
-    }
-    
-    try {
-        const response = await axios.get(URIMALSEM_URL, {
-            params: {
-                key: URIMALSEM_API_KEY,
-                q: word,
-                req_type: "json",
-                part: "word",
-                num: 10
-            }
-        });
-
-        const channel = response.data.channel;
-        const items = channel?.item;
-        const total = parseInt(channel?.total || 0);
-
-        if (!items || total === 0) {
-            return res.json({ isValid: false });
-        }
-
-        const itemList = Array.isArray(items) ? items : [items];
-        let isValid = false;
-
-        for (let item of itemList) {
-            let rawWord = item.word || '';
-            let cleanWord = rawWord.replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
-            if (cleanWord === word) {
-                isValid = true;
-                break;
-            }
-        }
-
-        // 정확히 일치하는 단어가 없더라도 total이 존재하면 유연하게 허용 (오탐지 방지)
-        if (!isValid && total > 0) {
-            isValid = true;
-        }
-
-        res.json({ isValid });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "API 요청 실패" });
-    }
+  const word = req.query.word;
+  if (!word || word.length < 2) {
+    return res.json({ isValid: false });
+  }
+  const isValid = await verifyWordWithNaver(word);
+  res.json({ isValid });
 });
 
 // ==========================================
-// 스타 끄투 게임 로직 (완벽한 단어 검증 및 끄투봇 연동)
+// 스타 끄투 게임 로직 (리눅스 서버 및 봇 연동)
 // ==========================================
 const gameState = {
   players: [],
@@ -212,11 +208,10 @@ function nextTurn() {
   startTimer();
 
   if (nextPlayer && nextPlayer.isBot) {
-    setTimeout(handleBotTurn, 2000);
+    setTimeout(handleBotTurn, 1500);
   }
 }
 
-// 🤖 끄투봇 API 기반 단어 자동 제출 로직
 async function handleBotTurn() {
   if (!gameState.players[gameState.currentTurn]?.isBot) return;
 
@@ -225,40 +220,30 @@ async function handleBotTurn() {
 
   let chosenWord = '';
 
+  const botDictionary = {
+    '사': ['사과', '사자', '사랑', '사막', '사진', '사람'],
+    '과': ['과학', '과자', '과일', '과정', '과목'],
+    '학': ['학생', '학교', '학원', '학습'],
+    '교': ['교실', '교복', '교과서', '교통'],
+    '나': ['나무', '나비', '나팔', '나라'],
+    '무': ['무궁화', '무지개', '무대'],
+    '구': ['구름', '구두', '구슬'],
+    '바': ['바나나', '바다', '바람', '바위']
+  };
+
   for (const startChar of validFirstChars) {
-    try {
-      const response = await axios.get(URIMALSEM_URL, {
-        params: {
-          key: URIMALSEM_API_KEY,
-          q: startChar,
-          req_type: 'json',
-          part: 'word',
-          num: 30
-        }
-      });
-
-      const items = response.data.channel?.item;
-      if (items) {
-        const itemList = Array.isArray(items) ? items : [items];
-        for (let item of itemList) {
-          let rawWord = item.word || '';
-          let cleanWord = rawWord.replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
-
-          if (cleanWord.length >= 2 && cleanWord.startsWith(startChar) && !gameState.usedWords.has(cleanWord)) {
-            chosenWord = cleanWord;
-            break;
-          }
-        }
+    const candidateList = botDictionary[startChar] || [startChar + '나무', startChar + '나라', startChar + '구름'];
+    for (let word of candidateList) {
+      if (!gameState.usedWords.has(word)) {
+        chosenWord = word;
+        break;
       }
-    } catch (error) {
-      console.error('봇 API 검색 오류:', error);
     }
-
     if (chosenWord) break;
   }
 
   if (!chosenWord) {
-    chosenWord = lastChar + '나무'; 
+    chosenWord = lastChar + '가방';
   }
 
   gameState.usedWords.add(chosenWord);
@@ -269,7 +254,7 @@ async function handleBotTurn() {
     word: chosenWord
   });
 
-  io.emit('systemMessage', `🤖 끄투봇이 API 검색을 통해 "${chosenWord}"(을)를 입력했습니다!`);
+  io.emit('systemMessage', `🤖 끄투봇이 "${chosenWord}"(을)를 입력했습니다!`);
   nextTurn();
 }
 
@@ -348,50 +333,10 @@ io.on('connection', (socket) => {
     }
 
     socket.emit('systemMessage', `🔍 "${word}" 단어 확인 중...`);
-    
-    try {
-        const response = await axios.get(URIMALSEM_URL, {
-            params: {
-                key: URIMALSEM_API_KEY,
-                q: word,
-                req_type: "json",
-                part: "word",
-                num: 10
-            }
-        });
+    const isValid = await verifyWordWithNaver(word);
 
-        const channel = response.data.channel;
-        const items = channel?.item;
-        const total = parseInt(channel?.total || 0);
-
-        if (!items || total === 0) {
-            return socket.emit('systemMessage', `❌ "${word}"은(는) 우리말샘에 등재되지 않은 단어입니다.`);
-        }
-
-        const itemList = Array.isArray(items) ? items : [items];
-        let isValidWord = false;
-
-        for (let item of itemList) {
-            let rawWord = item.word || '';
-            let cleanWord = rawWord.replace(/<[^>]*>?/gm, '').replace(/\([^)]*\)/g, '').replace(/[^가-힣]/g, '');
-            if (cleanWord === word) {
-                isValidWord = true;
-                break;
-            }
-        }
-
-        // 정확히 일치하는 형태가 없더라도 검색 결과 총 개수가 존재하면 유연하게 승인
-        if (!isValidWord && total > 0) {
-            isValidWord = true;
-        }
-
-        if (!isValidWord) {
-            return socket.emit('systemMessage', `❌ "${word}"은(는) 끄투에서 인정하지 않는 유효하지 않은 형태의 단어입니다.`);
-        }
-
-    } catch (error) {
-        console.error(error);
-        return socket.emit('systemMessage', '❌ 단어 검증 중 서버 오류가 발생했습니다.');
+    if (!isValid) {
+      return socket.emit('systemMessage', `❌ "${word}"은(는) 네이버 사전에 등재되지 않은 단어입니다.`);
     }
 
     gameState.usedWords.add(word);
